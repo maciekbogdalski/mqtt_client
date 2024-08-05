@@ -2,9 +2,11 @@ import os
 import paho.mqtt.client as mqtt
 import sqlite3
 import csv
+from dotenv import load_dotenv
+import time
+import threading
 import signal
 import sys
-from dotenv import load_dotenv
 
 # Load environment variables from the configuration file
 load_dotenv('config.env')
@@ -17,6 +19,10 @@ password = os.getenv("MQTT_PASSWORD")
 client_id = "zT4vYN89EU"
 topic_in = "ACE/ACE/InBitC1"
 topic_out = "ACE/ACE/OutBitD1"
+topic_write = "ACE/ACE/WriteUI16Tag"
+
+# Global flag to control thread running state
+running = True
 
 # Callback when the client connects to the broker
 def on_connect(client, userdata, flags, rc):
@@ -80,9 +86,32 @@ def save_message_to_csv(topic, message):
             writer.writeheader()
         writer.writerow({'topic': topic, 'message': message, 'timestamp': sqlite3.datetime.datetime.now()})
 
+# Function to publish messages to the MQTT broker
+def publish_message(client, topic, message):
+    client.publish(topic, message)
+    print(f"Published message: {message} to topic: {topic}")
+
+# Function to handle user input for publishing messages
+def user_input_publish():
+    global running
+    while running:
+        try:
+            user_input = input("Enter a message to publish to ACE/ACE/WriteUI16Tag: ")
+            if not running:
+                break
+            publish_message(client, topic_write, user_input)
+        except UnicodeDecodeError:
+            print("Input interrupted, shutting down.")
+            break
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            break
+
 # Signal handler for graceful shutdown
 def signal_handler(sig, frame):
-    print('Gracefully shutting down...')
+    global running
+    print('Shutting down...')
+    running = False
     client.disconnect()
     client.loop_stop()
     sys.exit(0)
@@ -108,5 +137,13 @@ client.on_log = on_log
 # Connect to the MQTT broker
 client.connect(broker, port)
 
+# Start a new thread for user input
+input_thread = threading.Thread(target=user_input_publish)
+input_thread.daemon = True
+input_thread.start()
+
 # Blocking loop to process network traffic, dispatch callbacks, and handle reconnecting
-client.loop_forever()
+try:
+    client.loop_forever()
+except KeyboardInterrupt:
+    signal_handler(signal.SIGINT, None)
