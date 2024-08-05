@@ -1,5 +1,9 @@
 import os
 import paho.mqtt.client as mqtt
+import sqlite3
+import csv
+import signal
+import sys
 from dotenv import load_dotenv
 
 # Load environment variables from the configuration file
@@ -30,6 +34,12 @@ def on_message(client, userdata, msg):
     received_message = msg.payload.decode()
     print(f"Received message: {received_message} from topic: {msg.topic}")
 
+    # Save the message to the database
+    save_message_to_db(msg.topic, received_message)
+
+    # Save the message to the CSV file
+    save_message_to_csv(msg.topic, received_message)
+
     # Check if the message is from the output topic and print the diode state
     if msg.topic == topic_out:
         print(f"Diode state changed: {received_message}")
@@ -41,6 +51,44 @@ def on_subscribe(client, userdata, mid, granted_qos):
 # Enable detailed logging
 def on_log(client, userdata, level, buf):
     print(f"Log: {buf}")
+
+# Function to save messages to the database
+def save_message_to_db(topic, message):
+    conn = sqlite3.connect('mqtt_messages.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY,
+            topic TEXT NOT NULL,
+            message TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    c.execute('''
+        INSERT INTO messages (topic, message) VALUES (?, ?)
+    ''', (topic, message))
+    conn.commit()
+    conn.close()
+
+# Function to save messages to a CSV file
+def save_message_to_csv(topic, message):
+    file_exists = os.path.isfile('mqtt_messages.csv')
+    with open('mqtt_messages.csv', mode='a', newline='') as csvfile:
+        fieldnames = ['topic', 'message', 'timestamp']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({'topic': topic, 'message': message, 'timestamp': sqlite3.datetime.datetime.now()})
+
+# Signal handler for graceful shutdown
+def signal_handler(sig, frame):
+    print('Gracefully shutting down...')
+    client.disconnect()
+    client.loop_stop()
+    sys.exit(0)
+
+# Register the signal handler for SIGINT (Ctrl+C)
+signal.signal(signal.SIGINT, signal_handler)
 
 # Create an MQTT client instance
 client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
