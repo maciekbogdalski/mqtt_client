@@ -7,7 +7,9 @@ import time
 import threading
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
+import signal
 import sys
+from datetime import datetime
 
 # Load environment variables from the configuration file
 load_dotenv('config.env')
@@ -25,14 +27,18 @@ topic_write = "ACE/ACE/WriteUI16Tag"
 # Global flag to control thread running state
 running = True
 
+# Global variable to track last state
+last_states = {}
+
 # Callback when the client connects to the broker
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         log_message("Connected to MQTT Broker!")
-        # Subscribe to the input and output topics
-        log_message(f"Subscribing to topics: {topic_in} and {topic_out}")
+        # Subscribe to the input, output, and write topics
+        log_message(f"Subscribing to topics: {topic_in}, {topic_out}, and {topic_write}")
         client.subscribe(topic_in)
         client.subscribe(topic_out)
+        client.subscribe(topic_write)
     else:
         log_message(f"Failed to connect, return code {rc}\n")
 
@@ -41,11 +47,13 @@ def on_message(client, userdata, msg):
     received_message = msg.payload.decode()
     log_message(f"Received message: {received_message} from topic: {msg.topic}")
 
-    # Save the message to the database
-    save_message_to_db(msg.topic, received_message)
-
-    # Save the message to the CSV file
-    save_message_to_csv(msg.topic, received_message)
+    # Only save the message if the state has changed
+    if msg.topic not in last_states or last_states[msg.topic] != received_message:
+        last_states[msg.topic] = received_message
+        # Save the message to the database
+        save_message_to_db(msg.topic, received_message)
+        # Save the message to the CSV file
+        save_message_to_csv(msg.topic, received_message)
 
     # Check if the message is from the output topic and print the diode state
     if msg.topic == topic_out:
@@ -61,36 +69,48 @@ def on_log(client, userdata, level, buf):
 
 # Function to save messages to the database
 def save_message_to_db(topic, message):
-    conn = sqlite3.connect('mqtt_messages.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY,
-            topic TEXT NOT NULL,
-            message TEXT NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    c.execute('''
-        INSERT INTO messages (topic, message) VALUES (?, ?)
-    ''', (topic, message))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('mqtt_messages.db')
+        c = conn.cursor()
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY,
+                topic TEXT NOT NULL,
+                message TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        c.execute('''
+            INSERT INTO messages (topic, message, timestamp) VALUES (?, ?, ?)
+        ''', (topic, message, current_time))
+        conn.commit()
+        conn.close()
+        log_message(f"Saved message to DB: {message} from topic: {topic}")
+    except Exception as e:
+        log_message(f"Error saving to DB: {e}")
 
 # Function to save messages to a CSV file
 def save_message_to_csv(topic, message):
-    file_exists = os.path.isfile('mqtt_messages.csv')
-    with open('mqtt_messages.csv', mode='a', newline='') as csvfile:
-        fieldnames = ['topic', 'message', 'timestamp']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow({'topic': topic, 'message': message, 'timestamp': sqlite3.datetime.datetime.now()})
+    try:
+        file_exists = os.path.isfile('mqtt_messages.csv')
+        with open('mqtt_messages.csv', mode='a', newline='') as csvfile:
+            fieldnames = ['topic', 'message', 'timestamp']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({'topic': topic, 'message': message, 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
+        log_message(f"Saved message to CSV: {message} from topic: {topic}")
+    except Exception as e:
+        log_message(f"Error saving to CSV: {e}")
 
 # Function to publish messages to the MQTT broker
 def publish_message(client, topic, message):
     client.publish(topic, message)
     log_message(f"Published message: {message} to topic: {topic}")
+    if topic == topic_write:
+        save_message_to_db(topic, message)
+        save_message_to_csv(topic, message)
 
 # Function to handle user input for publishing messages
 def user_input_publish():
@@ -141,6 +161,7 @@ def log_message(message):
     log_box.insert(tk.END, message + '\n')
     log_box.config(state=tk.DISABLED)
     log_box.yview(tk.END)
+    print(message)  # Also print to console for easier debugging
 
 # GUI setup
 root = tk.Tk()
