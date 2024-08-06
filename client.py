@@ -5,7 +5,8 @@ import csv
 from dotenv import load_dotenv
 import time
 import threading
-import signal
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
 import sys
 
 # Load environment variables from the configuration file
@@ -27,18 +28,18 @@ running = True
 # Callback when the client connects to the broker
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("Connected to MQTT Broker!")
+        log_message("Connected to MQTT Broker!")
         # Subscribe to the input and output topics
-        print(f"Subscribing to topics: {topic_in} and {topic_out}")
+        log_message(f"Subscribing to topics: {topic_in} and {topic_out}")
         client.subscribe(topic_in)
         client.subscribe(topic_out)
     else:
-        print(f"Failed to connect, return code {rc}\n")
+        log_message(f"Failed to connect, return code {rc}\n")
 
 # Callback when a message is received from the broker
 def on_message(client, userdata, msg):
     received_message = msg.payload.decode()
-    print(f"Received message: {received_message} from topic: {msg.topic}")
+    log_message(f"Received message: {received_message} from topic: {msg.topic}")
 
     # Save the message to the database
     save_message_to_db(msg.topic, received_message)
@@ -48,15 +49,15 @@ def on_message(client, userdata, msg):
 
     # Check if the message is from the output topic and print the diode state
     if msg.topic == topic_out:
-        print(f"Diode state changed: {received_message}")
+        log_message(f"Diode state changed: {received_message}")
 
 # Callback when the client subscribes to a topic
 def on_subscribe(client, userdata, mid, granted_qos):
-    print(f"Subscribed to topic with QoS: {granted_qos}")
+    log_message(f"Subscribed to topic with QoS: {granted_qos}")
 
 # Enable detailed logging
 def on_log(client, userdata, level, buf):
-    print(f"Log: {buf}")
+    log_message(f"Log: {buf}")
 
 # Function to save messages to the database
 def save_message_to_db(topic, message):
@@ -89,7 +90,7 @@ def save_message_to_csv(topic, message):
 # Function to publish messages to the MQTT broker
 def publish_message(client, topic, message):
     client.publish(topic, message)
-    print(f"Published message: {message} to topic: {topic}")
+    log_message(f"Published message: {message} to topic: {topic}")
 
 # Function to handle user input for publishing messages
 def user_input_publish():
@@ -110,14 +111,11 @@ def user_input_publish():
 # Signal handler for graceful shutdown
 def signal_handler(sig, frame):
     global running
-    print('Shutting down...')
+    log_message('Gracefully shutting down...')
     running = False
     client.disconnect()
     client.loop_stop()
     sys.exit(0)
-
-# Register the signal handler for SIGINT (Ctrl+C)
-signal.signal(signal.SIGINT, signal_handler)
 
 # Create an MQTT client instance
 client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
@@ -137,13 +135,52 @@ client.on_log = on_log
 # Connect to the MQTT broker
 client.connect(broker, port)
 
-# Start a new thread for user input
-input_thread = threading.Thread(target=user_input_publish)
-input_thread.daemon = True
-input_thread.start()
+# Function to log messages in the GUI
+def log_message(message):
+    log_box.config(state=tk.NORMAL)
+    log_box.insert(tk.END, message + '\n')
+    log_box.config(state=tk.DISABLED)
+    log_box.yview(tk.END)
 
-# Blocking loop to process network traffic, dispatch callbacks, and handle reconnecting
-try:
-    client.loop_forever()
-except KeyboardInterrupt:
-    signal_handler(signal.SIGINT, None)
+# GUI setup
+root = tk.Tk()
+root.title("MQTT Client")
+
+frame = tk.Frame(root)
+frame.pack(padx=10, pady=10)
+
+log_box = scrolledtext.ScrolledText(frame, width=50, height=20, state=tk.DISABLED)
+log_box.pack()
+
+input_label = tk.Label(frame, text="Enter message to publish:")
+input_label.pack(pady=(10, 0))
+
+input_entry = tk.Entry(frame, width=50)
+input_entry.pack(pady=(0, 10))
+
+def publish_input_message():
+    message = input_entry.get()
+    if message:
+        publish_message(client, topic_write, message)
+        input_entry.delete(0, tk.END)
+
+publish_button = tk.Button(frame, text="Publish", command=publish_input_message)
+publish_button.pack()
+
+def on_closing():
+    global running
+    if messagebox.askokcancel("Quit", "Do you want to quit?"):
+        running = False
+        client.disconnect()
+        client.loop_stop()
+        root.destroy()
+
+root.protocol("WM_DELETE_WINDOW", on_closing)
+
+# Start a new thread for the MQTT client loop
+mqtt_thread = threading.Thread(target=client.loop_forever)
+mqtt_thread.daemon = True
+mqtt_thread.start()
+
+# Run the Tkinter event loop
+root.mainloop()
