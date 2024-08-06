@@ -1,7 +1,7 @@
 import sqlite3
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QTextEdit, QPushButton, QLineEdit, QMessageBox
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class DataRetrievalWindow(QMainWindow):
     def __init__(self):
@@ -21,6 +21,15 @@ class DataRetrievalWindow(QMainWindow):
         self.today_button = QPushButton("Show Today's Records")
         self.today_button.clicked.connect(self.show_todays_records)
 
+        self.show_in_button = QPushButton("Show All 'In' Records")
+        self.show_in_button.clicked.connect(self.show_all_in_records)
+
+        self.show_out_button = QPushButton("Show All 'Out' Records")
+        self.show_out_button.clicked.connect(self.show_all_out_records)
+
+        self.show_past_8_hours_button = QPushButton("Show Records from Past 8 Hours")
+        self.show_past_8_hours_button.clicked.connect(self.show_past_8_hours_records)
+
         self.result_box = QTextEdit()
         self.result_box.setReadOnly(True)
 
@@ -28,6 +37,9 @@ class DataRetrievalWindow(QMainWindow):
         layout.addWidget(self.sql_input)
         layout.addWidget(self.execute_button)
         layout.addWidget(self.today_button)
+        layout.addWidget(self.show_in_button)
+        layout.addWidget(self.show_out_button)
+        layout.addWidget(self.show_past_8_hours_button)
         layout.addWidget(QLabel("Results:"))
         layout.addWidget(self.result_box)
 
@@ -49,6 +61,31 @@ class DataRetrievalWindow(QMainWindow):
     def show_todays_records(self):
         today_date = datetime.now().strftime('%Y-%m-%d')
         query = f"SELECT * FROM messages WHERE DATE(timestamp) = '{today_date}'"
+        try:
+            results = self.run_query(query)
+            self.display_results(results)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def show_all_in_records(self):
+        query = "SELECT * FROM messages WHERE topic LIKE '%In%'"
+        try:
+            results = self.run_query(query)
+            self.display_results(results)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def show_all_out_records(self):
+        query = "SELECT * FROM messages WHERE topic LIKE '%Out%'"
+        try:
+            results = self.run_query(query)
+            self.display_results(results)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def show_past_8_hours_records(self):
+        eight_hours_ago = datetime.now() - timedelta(hours=8)
+        query = f"SELECT * FROM messages WHERE timestamp >= '{eight_hours_ago}'"
         try:
             results = self.run_query(query)
             self.display_results(results)
