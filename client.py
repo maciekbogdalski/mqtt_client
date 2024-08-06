@@ -3,13 +3,11 @@ import paho.mqtt.client as mqtt
 import sqlite3
 import csv
 from dotenv import load_dotenv
-import time
 import threading
-import tkinter as tk
-from tkinter import scrolledtext, messagebox
-import signal
 import sys
 from datetime import datetime
+from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QTextEdit, QPushButton, QLineEdit, QMessageBox
+from PyQt5.QtCore import pyqtSignal, QObject
 
 # Load environment variables from the configuration file
 load_dotenv('config.env')
@@ -29,23 +27,17 @@ running = True
 # Global variable to track last state
 last_states = {}
 
-# Function to log messages in the GUI
-def log_message(message):
-    log_box.config(state=tk.NORMAL)
-    log_box.insert(tk.END, message + '\n')
-    log_box.config(state=tk.DISABLED)
-    log_box.yview(tk.END)
-    print(message)  # Also print to console for easier debugging
+# MQTT client setup
+client = mqtt.Client(client_id=client_id)
+client.username_pw_set(username, password)
+client.tls_set(tls_version=mqtt.ssl.PROTOCOL_TLS)
 
-# Function to update the state display
-def update_state_display(topic, message):
-    if topic == "ACE/ACE/InBitC1":
-        in_state_label.config(text=f"Current In State: {message}")
-    elif topic == "ACE/ACE/OutBitD1":
-        out_state_label.config(text=f"Current Out State: {message}")
-    elif topic == "ACE/ACE/WriteUI16Tag":
-        if message != "0":
-            write_state_label.config(text=f"Current Write State: {message}")
+# Create a PyQt5 signal to update the GUI from the MQTT callbacks
+class MqttSignal(QObject):
+    message_received = pyqtSignal(str, str)
+    log_message = pyqtSignal(str)
+
+mqtt_signal = MqttSignal()
 
 # Function to save messages to the database
 def save_message_to_db(topic, message):
@@ -66,9 +58,9 @@ def save_message_to_db(topic, message):
         ''', (topic, message, current_time))
         conn.commit()
         conn.close()
-        log_message(f"Saved message to DB: {message} from topic: {topic}")
+        mqtt_signal.log_message.emit(f"Saved message to DB: {message} from topic: {topic}")
     except Exception as e:
-        log_message(f"Error saving to DB: {e}")
+        mqtt_signal.log_message.emit(f"Error saving to DB: {e}")
 
 # Function to save messages to a CSV file
 def save_message_to_csv(topic, message):
@@ -80,146 +72,100 @@ def save_message_to_csv(topic, message):
             if not file_exists:
                 writer.writeheader()
             writer.writerow({'topic': topic, 'message': message, 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
-        log_message(f"Saved message to CSV: {message} from topic: {topic}")
+        mqtt_signal.log_message.emit(f"Saved message to CSV: {message} from topic: {topic}")
     except Exception as e:
-        log_message(f"Error saving to CSV: {e}")
-
-# Function to publish messages to the MQTT broker
-def publish_message(client, topic, message, retain=False):
-    client.publish(topic, message, retain=retain)
-    log_message(f"Published message: {message} to topic: {topic}")
-    if topic == "ACE/ACE/WriteUI16Tag":
-        update_state_display(topic, message)
-        save_message_to_db(topic, message)
-        save_message_to_csv(topic, message)
+        mqtt_signal.log_message.emit(f"Error saving to CSV: {e}")
 
 # Callback when the client connects to the broker
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        log_message("Connected to MQTT Broker!")
-        # Subscribe to all topics
+        mqtt_signal.log_message.emit("Connected to MQTT Broker!")
         client.subscribe(wildcard_topic)
     else:
-        log_message(f"Failed to connect, return code {rc}\n")
+        mqtt_signal.log_message.emit(f"Failed to connect, return code {rc}\n")
 
 # Callback when a message is received from the broker
 def on_message(client, userdata, msg):
     received_message = msg.payload.decode()
-    log_message(f"Received message: {received_message} from topic: {msg.topic}")
+    mqtt_signal.message_received.emit(msg.topic, received_message)
 
-    # Only save the message if the state has changed
     if msg.topic not in last_states or last_states[msg.topic] != received_message:
         last_states[msg.topic] = received_message
-        # Update the GUI with the latest state if it's a known topic
-        update_state_display(msg.topic, received_message)
-        # Save the message to the database
         save_message_to_db(msg.topic, received_message)
-        # Save the message to the CSV file
         save_message_to_csv(msg.topic, received_message)
 
-# Callback when the client subscribes to a topic
-def on_subscribe(client, userdata, mid, granted_qos):
-    log_message(f"Subscribed to topic with QoS: {granted_qos}")
-
-# Enable detailed logging
-def on_log(client, userdata, level, buf):
-    log_message(f"Log: {buf}")
-
-# Function to handle user input for publishing messages
-def publish_input_message():
-    topic = topic_entry.get()
-    message = message_entry.get()
-    if topic and message:
-        publish_message(client, topic, message, retain=True)
-        message_entry.delete(0, tk.END)
-
-# Signal handler for graceful shutdown
-def signal_handler(sig, frame):
-    global running
-    log_message('Gracefully shutting down...')
-    running = False
-    client.disconnect()
-    client.loop_stop()
-    sys.exit(0)
-
-# Create an MQTT client instance
-client = mqtt.Client(client_id=client_id)
-
-# Set username and password
-client.username_pw_set(username, password)
-
-# Configure network encryption and authentication options
-client.tls_set(tls_version=mqtt.ssl.PROTOCOL_TLS)
-
-# Attach the callback functions
 client.on_connect = on_connect
 client.on_message = on_message
-client.on_subscribe = on_subscribe
-client.on_log = on_log
 
-# Connect to the MQTT broker
-client.connect(broker, port)
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
 
-# GUI setup
-root = tk.Tk()
-root.title("MQTT Client")
+        self.setWindowTitle("MQTT Client")
+        self.setGeometry(100, 100, 800, 600)
 
-frame = tk.Frame(root)
-frame.pack(padx=10, pady=10)
+        layout = QVBoxLayout()
 
-# Frame for state display
-state_frame = tk.Frame(frame)
-state_frame.pack(pady=10)
+        self.in_state_label = QLabel("Current In State: N/A")
+        self.out_state_label = QLabel("Current Out State: N/A")
 
-in_state_label = tk.Label(state_frame, text="Current In State: N/A", font=("Helvetica", 12))
-in_state_label.pack(side=tk.LEFT, padx=5)
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
 
-out_state_label = tk.Label(state_frame, text="Current Out State: N/A", font=("Helvetica", 12))
-out_state_label.pack(side=tk.LEFT, padx=5)
+        self.topic_input = QLineEdit()
+        self.topic_input.setPlaceholderText("Enter topic")
 
-write_state_label = tk.Label(state_frame, text="Current Write State: N/A", font=("Helvetica", 12))
-write_state_label.pack(side=tk.LEFT, padx=5)
+        self.message_input = QLineEdit()
+        self.message_input.setPlaceholderText("Enter message")
 
-# Frame for log box
-log_frame = tk.Frame(frame)
-log_frame.pack(pady=10)
+        self.publish_button = QPushButton("Publish")
+        self.publish_button.clicked.connect(self.publish_message)
 
-log_box = scrolledtext.ScrolledText(log_frame, width=50, height=20, state=tk.DISABLED)
-log_box.pack()
+        layout.addWidget(self.in_state_label)
+        layout.addWidget(self.out_state_label)
+        layout.addWidget(self.log_box)
+        layout.addWidget(self.topic_input)
+        layout.addWidget(self.message_input)
+        layout.addWidget(self.publish_button)
 
-# Frame for input
-input_frame = tk.Frame(frame)
-input_frame.pack(pady=10)
+        container = QWidget()
+        container.setLayout(layout)
+        self.setCentralWidget(container)
 
-topic_label = tk.Label(input_frame, text="Enter topic:", font=("Helvetica", 12))
-topic_label.pack(side=tk.LEFT, padx=5)
+        mqtt_signal.message_received.connect(self.update_state_display)
+        mqtt_signal.log_message.connect(self.log_message)
 
-topic_entry = tk.Entry(input_frame, width=30)
-topic_entry.pack(side=tk.LEFT, padx=5)
+    def update_state_display(self, topic, message):
+        if topic == "ACE/ACE/InBitC1":
+            self.in_state_label.setText(f"Current In State: {message}")
+        elif topic == "ACE/ACE/OutBitD1":
+            self.out_state_label.setText(f"Current Out State: {message}")
 
-message_label = tk.Label(input_frame, text="Enter message:", font=("Helvetica", 12))
-message_label.pack(side=tk.LEFT, padx=5)
+    def log_message(self, message):
+        self.log_box.append(message)
 
-message_entry = tk.Entry(input_frame, width=30)
-message_entry.pack(side=tk.LEFT, padx=5)
+    def publish_message(self):
+        topic = self.topic_input.text()
+        message = self.message_input.text()
+        if topic and message:
+            client.publish(topic, message, retain=True)
+            self.log_message(f"Published message: {message} to topic: {topic}")
+            self.topic_input.clear()
+            self.message_input.clear()
+        else:
+            QMessageBox.warning(self, "Input Error", "Both topic and message must be provided")
 
-publish_button = tk.Button(input_frame, text="Publish", command=publish_input_message)
-publish_button.pack(side=tk.LEFT, padx=5)
+def start_mqtt():
+    client.connect(broker, port)
+    client.loop_start()
 
-def on_closing():
-    global running
-    if messagebox.askokcancel("Quit", "Do you want to quit?"):
-        running = False
-        client.disconnect()
-        client.loop_stop()
-        root.destroy()
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
 
-root.protocol("WM_DELETE_WINDOW", on_closing)
+    mqtt_thread = threading.Thread(target=start_mqtt)
+    mqtt_thread.daemon = True
+    mqtt_thread.start()
 
-# Start a new thread for the MQTT client loop
-mqtt_thread = threading.Thread(target=client.loop_forever)
-mqtt_thread.daemon = True
-mqtt_thread.start()
-
-# Run the Tkinter event loop
-root.mainloop()
+    sys.exit(app.exec_())
