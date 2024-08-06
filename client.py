@@ -8,6 +8,7 @@ import sys
 from datetime import datetime
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QTextEdit, QPushButton, QLineEdit, QMessageBox
 from PyQt5.QtCore import pyqtSignal, QObject
+from cryptography.fernet import Fernet
 
 # Load environment variables from the configuration file
 load_dotenv('config.env')
@@ -39,9 +40,24 @@ class MqttSignal(QObject):
 
 mqtt_signal = MqttSignal()
 
+# Load the encryption key from the file
+with open('encryption_key.key', 'rb') as key_file:
+    encryption_key = key_file.read()
+
+cipher_suite = Fernet(encryption_key)
+
+# Function to encrypt messages
+def encrypt_message(message):
+    return cipher_suite.encrypt(message.encode())
+
+# Function to decrypt messages
+def decrypt_message(encrypted_message):
+    return cipher_suite.decrypt(encrypted_message).decode()
+
 # Function to save messages to the database
 def save_message_to_db(topic, message):
     try:
+        encrypted_message = encrypt_message(message)
         conn = sqlite3.connect('mqtt_messages.db')
         c = conn.cursor()
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -49,30 +65,31 @@ def save_message_to_db(topic, message):
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY,
                 topic TEXT NOT NULL,
-                message TEXT NOT NULL,
+                message BLOB NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         c.execute('''
             INSERT INTO messages (topic, message, timestamp) VALUES (?, ?, ?)
-        ''', (topic, message, current_time))
+        ''', (topic, encrypted_message, current_time))
         conn.commit()
         conn.close()
-        mqtt_signal.log_message.emit(f"Saved message to DB: {message} from topic: {topic}")
+        mqtt_signal.log_message.emit(f"Saved encrypted message to DB: {message} from topic: {topic}")
     except Exception as e:
         mqtt_signal.log_message.emit(f"Error saving to DB: {e}")
 
 # Function to save messages to a CSV file
 def save_message_to_csv(topic, message):
     try:
+        encrypted_message = encrypt_message(message).decode()
         file_exists = os.path.isfile('mqtt_messages.csv')
         with open('mqtt_messages.csv', mode='a', newline='') as csvfile:
             fieldnames = ['topic', 'message', 'timestamp']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             if not file_exists:
                 writer.writeheader()
-            writer.writerow({'topic': topic, 'message': message, 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
-        mqtt_signal.log_message.emit(f"Saved message to CSV: {message} from topic: {topic}")
+            writer.writerow({'topic': topic, 'message': encrypted_message, 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
+        mqtt_signal.log_message.emit(f"Saved encrypted message to CSV: {message} from topic: {topic}")
     except Exception as e:
         mqtt_signal.log_message.emit(f"Error saving to CSV: {e}")
 

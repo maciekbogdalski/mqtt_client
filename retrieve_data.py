@@ -2,6 +2,17 @@ import sqlite3
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QTextEdit, QPushButton, QLineEdit, QMessageBox
 from datetime import datetime, timedelta
+from cryptography.fernet import Fernet
+
+# Load the encryption key from the file
+with open('encryption_key.key', 'rb') as key_file:
+    encryption_key = key_file.read()
+
+cipher_suite = Fernet(encryption_key)
+
+# Function to decrypt messages
+def decrypt_message(encrypted_message):
+    return cipher_suite.decrypt(encrypted_message).decode()
 
 class DataRetrievalWindow(QMainWindow):
     def __init__(self):
@@ -98,6 +109,13 @@ class DataRetrievalWindow(QMainWindow):
         c.execute(query)
         if query.strip().lower().startswith("select"):
             results = c.fetchall()
+            # Decrypt the messages in the results
+            decrypted_results = []
+            for row in results:
+                decrypted_row = list(row)
+                decrypted_row[2] = decrypt_message(decrypted_row[2])
+                decrypted_results.append(decrypted_row)
+            results = decrypted_results
         else:
             conn.commit()
             results = [(f"Query executed successfully: {query}",)]
