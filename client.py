@@ -9,6 +9,8 @@ from datetime import datetime
 from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QTextEdit, QPushButton, QLineEdit, QMessageBox
 from PyQt5.QtCore import pyqtSignal, QObject
 from cryptography.fernet import Fernet
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS, WriteOptions
 
 # Load environment variables from the configuration file
 load_dotenv('config.env')
@@ -45,6 +47,15 @@ with open('encryption_key.key', 'rb') as key_file:
     encryption_key = key_file.read()
 
 cipher_suite = Fernet(encryption_key)
+
+# Set up InfluxDB client for InfluxDB Cloud
+influxdb_url = os.getenv("INFLUXDB_URL")
+influxdb_token = os.getenv("INFLUXDB_TOKEN")
+influxdb_org = os.getenv("INFLUXDB_ORG")
+influxdb_bucket = os.getenv("INFLUXDB_BUCKET")
+
+influx_client = InfluxDBClient(url=influxdb_url, token=influxdb_token)
+write_api = influx_client.write_api(write_options=WriteOptions(write_type=SYNCHRONOUS))
 
 # Function to encrypt messages
 def encrypt_message(message):
@@ -93,6 +104,15 @@ def save_message_to_csv(topic, message):
     except Exception as e:
         mqtt_signal.log_message.emit(f"Error saving to CSV: {e}")
 
+# Function to save messages to InfluxDB
+def save_message_to_influxdb(topic, message):
+    try:
+        point = Point("mqtt_messages").tag("topic", topic).field("message", message).time(datetime.utcnow(), WritePrecision.NS)
+        write_api.write(bucket=influxdb_bucket, org=influxdb_org, record=point)
+        mqtt_signal.log_message.emit(f"Saved message to InfluxDB: {message} from topic: {topic}")
+    except Exception as e:
+        mqtt_signal.log_message.emit(f"Error saving to InfluxDB: {e}")
+
 # Callback when the client connects to the broker
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -110,6 +130,7 @@ def on_message(client, userdata, msg):
         last_states[msg.topic] = received_message
         save_message_to_db(msg.topic, received_message)
         save_message_to_csv(msg.topic, received_message)
+        save_message_to_influxdb(msg.topic, received_message)
 
 client.on_connect = on_connect
 client.on_message = on_message
