@@ -100,3 +100,7 @@ To generate an executable for the main application using `PyInstaller`, run the 
 
 ```sh
 pyinstaller --onefile --distpath . --workpath . --specpath . main_app.py
+```
+
+## License
+This project is licensed under a Proprietary License. All Rights Reserved. Unauthorized copying, modification, or distribution of this software is strictly prohibited.
